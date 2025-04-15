@@ -1,9 +1,9 @@
 {
   "scripts": {
-  "start": "node server.js"
-},
+    "start": "node server.js"
+  },
   "dependencies": {
-    "bcrypt": "^5.1.1",
+    "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
     "dotenv": "^16.4.7",
@@ -14,7 +14,4 @@
     "mongoose": "^8.13.2",
     "path": "^0.12.7"
   }
-  
-
-
 }
