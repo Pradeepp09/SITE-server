@@ -1,0 +1,52 @@
+// Clear Decrypted Images
+app.post("/clear-decrypted", (req, res) => {
+    fs.readdir(imageDir, (err, files) => {
+        if (err) return res.status(500).json({ success: false, message: "Error clearing images" });
+        files.forEach(file => fs.unlinkSync(path.join(imageDir, file)));
+        res.status(200).json({ success: true, message: "Decrypted images cleared" });
+    });
+});
+
+// Decrypt Images// Decrypt Images with AES-128-CBC
+app.post("/decrypt-images", async (req, res) => {
+    try {
+        const { userId, aesKey } = req.body;
+        const user = await User.findById(userId);
+        if (!user || !(await bcrypt.compare(aesKey, user.aesKey))) {
+            return res.status(401).json({ success: false, message: "Invalid AES key" });
+        }
+
+        const images = await Image.find({ userId });
+
+        for (const img of images) {
+            const encryptedData = fs.readFileSync(path.join(encryptedImageDir, img.filename));
+            const iv = Buffer.from(img.iv, "hex");
+            const keyBuffer = Buffer.from(aesKey, "utf8");
+
+            const decipher = crypto.createDecipheriv("aes-128-cbc", keyBuffer, iv);
+            const decryptedImage = Buffer.concat([decipher.update(encryptedData), decipher.final()]);
+
+            fs.writeFileSync(path.join(imageDir, img.filename), decryptedImage);
+        }
+
+        res.status(200).json({ success: true, message: "Images decrypted successfully" });
+    } catch (err) {
+        res.status(500).json({ success: false, message: "Error decrypting images", error: err.message });
+    }
+});
+
+
+
+// Verify AES Key
+app.post("/verify-key", async (req, res) => {
+    try {
+        const { userId, aesKey } = req.body;
+        const user = await User.findById(userId);
+        if (!user || !(await bcrypt.compare(aesKey, user.aesKey))) {
+            return res.status(401).json({ success: false, message: "Invalid AES key" });
+        }
+        res.status(200).json({ success: true, message: "Key verified" });
+    } catch (err) {
+        res.status(500).json({ success: false, message: "Server error" });
+    }
+});
