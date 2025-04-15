@@ -119,7 +119,7 @@ app.post("/login", async (req, res) => {
 });
 
 // ESP32-CAM Upload Endpoint
-app.post("/upload", async (req, res) => {
+app.post('/upload', express.raw({ type: 'image/jpeg', limit: '10mb' }), async (req, res)  => {
     try {
         const buffer = req.body;
 
