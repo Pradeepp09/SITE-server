@@ -119,7 +119,8 @@ app.post("/login", async (req, res) => {
 });
 
 // ESP32-CAM Upload Endpoint
-app.post('/upload', express.raw({ type: 'image/jpeg', limit: '10mb' }), async (req, res)  => {
+// ESP32-CAM Upload Endpoint
+app.post('/upload', express.raw({ type: 'image/jpeg', limit: '10mb' }), async (req, res) => {
     try {
         const buffer = req.body;
 
@@ -127,48 +128,62 @@ app.post('/upload', express.raw({ type: 'image/jpeg', limit: '10mb' }), async (r
             return res.status(400).json({ success: false, message: "No image data received" });
         }
 
-        // Save original image
         const timestamp = Date.now();
         const originalFilename = `img_${timestamp}.jpg`;
         const originalPath = path.join(RECEIVED_DIR, originalFilename);
-        fs.writeFileSync(originalPath, buffer);
 
-        // Get AES Key from one registered user (modify if user-specific needed)
-        const user = await User.findOne({}); // You can modify this to retrieve by user email, if applicable
+        // Save original image temporarily
+        try {
+            fs.writeFileSync(originalPath, buffer);
+        } catch (err) {
+            return res.status(500).json({ success: false, message: "Failed to save original image", error: err.message });
+        }
+
+        // Retrieve a user with AES key (modify this if tied to a specific user/email)
+        const user = await User.findOne({});
         if (!user || !user.aesKey) {
+            fs.unlinkSync(originalPath);
             return res.status(500).json({ success: false, message: "No AES key found in DB" });
         }
 
-        // Create 128-bit key from AES Key (stored as plaintext in the DB)
+        // Prepare AES key
         const keyBuffer = Buffer.alloc(16);
-        Buffer.from(user.aesKey, "utf8").copy(keyBuffer);
+        Buffer.from(user.aesKey, 'utf8').copy(keyBuffer);
 
         const iv = crypto.randomBytes(16);
-        const cipher = crypto.createCipheriv("aes-128-cbc", keyBuffer, iv);
+        const cipher = crypto.createCipheriv('aes-128-cbc', keyBuffer, iv);
         let encrypted = cipher.update(buffer);
         encrypted = Buffer.concat([encrypted, cipher.final()]);
 
-        const encryptedFilename = `enc_${timestamp}.jpg`; // Naming the encrypted file
+        const encryptedFilename = `enc_${timestamp}.jpg`;
         const encryptedPath = path.join(ENCRYPTED_DIR, encryptedFilename);
-        fs.writeFileSync(encryptedPath, encrypted);
 
-        // Save metadata
+        // Save encrypted image
+        try {
+            fs.writeFileSync(encryptedPath, encrypted);
+        } catch (err) {
+            return res.status(500).json({ success: false, message: "Failed to save encrypted image", error: err.message });
+        }
+
+        // Save image metadata to DB
         const newImage = new Image({
             filename: encryptedFilename,
-            iv: iv.toString("hex"),
-            email: user.email // Store the email associated with the encryption
+            iv: iv.toString('hex'),
+            email: user.email
         });
+
         await newImage.save();
 
-        // Delete original image
+        // Remove the original image
         fs.unlinkSync(originalPath);
 
         res.status(200).json({ success: true, message: "Image received and encrypted", filename: encryptedFilename });
     } catch (err) {
-        console.error("Upload/Encrypt error:", err);
+        console.error("Upload/Encrypt error:", err.message);
         res.status(500).json({ success: false, message: "Server error", error: err.message });
     }
 });
+
 
 
 // Route: Decrypt and return images
