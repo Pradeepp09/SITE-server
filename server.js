@@ -6,6 +6,8 @@ const fs = require("fs");
 const path = require("path");
 const bcrypt = require('bcryptjs');
 const crypto = require("crypto");
+const cloudinary = require('./cloudinary');
+const streamifier = require('streamifier');
 
 // Directory constants (replace with actual paths)
 const DECRYPTED_DIR = path.join(__dirname, 'decrypted-images');
@@ -118,7 +120,7 @@ app.post("/login", async (req, res) => {
     }
 });
 
-// ESP32-CAM Upload Endpoint
+
 // ESP32-CAM Upload Endpoint
 app.post('/upload', express.raw({ type: 'image/jpeg', limit: '10mb' }), async (req, res) => {
     try {
@@ -129,20 +131,10 @@ app.post('/upload', express.raw({ type: 'image/jpeg', limit: '10mb' }), async (r
         }
 
         const timestamp = Date.now();
-        const originalFilename = `img_${timestamp}.jpg`;
-        const originalPath = path.join(RECEIVED_DIR, originalFilename);
 
-        // Save original image temporarily
-        try {
-            fs.writeFileSync(originalPath, buffer);
-        } catch (err) {
-            return res.status(500).json({ success: false, message: "Failed to save original image", error: err.message });
-        }
-
-        // Retrieve a user with AES key (modify this if tied to a specific user/email)
+        // Retrieve user and AES key
         const user = await User.findOne({});
         if (!user || !user.aesKey) {
-            fs.unlinkSync(originalPath);
             return res.status(500).json({ success: false, message: "No AES key found in DB" });
         }
 
@@ -155,35 +147,52 @@ app.post('/upload', express.raw({ type: 'image/jpeg', limit: '10mb' }), async (r
         let encrypted = cipher.update(buffer);
         encrypted = Buffer.concat([encrypted, cipher.final()]);
 
-        const encryptedFilename = `enc_${timestamp}.jpg`;
-        const encryptedPath = path.join(ENCRYPTED_DIR, encryptedFilename);
+        // Upload encrypted image to Cloudinary
+        const uploadToCloudinary = () => {
+            return new Promise((resolve, reject) => {
+                const uploadStream = cloudinary.uploader.upload_stream(
+                    {
+                        resource_type: 'image',
+                        public_id: `encrypted/enc_${timestamp}`, // optional folder and name
+                        overwrite: true
+                    },
+                    (error, result) => {
+                        if (error) reject(error);
+                        else resolve(result);
+                    }
+                );
 
-        // Save encrypted image
+                streamifier.createReadStream(encrypted).pipe(uploadStream);
+            });
+        };
+
+        let result;
         try {
-            fs.writeFileSync(encryptedPath, encrypted);
+            result = await uploadToCloudinary();
         } catch (err) {
-            return res.status(500).json({ success: false, message: "Failed to save encrypted image", error: err.message });
+            return res.status(500).json({ success: false, message: "Cloudinary upload failed", error: err.message });
         }
 
         // Save image metadata to DB
         const newImage = new Image({
-            filename: encryptedFilename,
+            filename: `enc_${timestamp}.jpg`,
             iv: iv.toString('hex'),
+            cloudinaryUrl: result.secure_url,
             email: user.email
         });
 
         await newImage.save();
 
-        // Remove the original image
-        fs.unlinkSync(originalPath);
-
-        res.status(200).json({ success: true, message: "Image received and encrypted", filename: encryptedFilename });
+        res.status(200).json({
+            success: true,
+            message: "Image encrypted and uploaded to Cloudinary",
+            cloudinaryUrl: result.secure_url
+        });
     } catch (err) {
         console.error("Upload/Encrypt error:", err.message);
         res.status(500).json({ success: false, message: "Server error", error: err.message });
     }
 });
-
 
 
 // Route: Decrypt and return images
