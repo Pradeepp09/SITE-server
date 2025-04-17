@@ -196,87 +196,74 @@ app.post('/upload', express.raw({ type: 'image/jpeg', limit: '10mb' }), async (r
 
 
 // Route: Decrypt and return images
+const axios = require('axios');
+
 app.post("/decrypt-images", async (req, res) => {
-    try {
-      const { email, aesKey } = req.body;
-  
-      if (!email || !aesKey) {
-        return res.status(400).json({ success: false, message: "Email and AES Key are required" });
-      }
-  
-      const user = await User.findOne({ email });
-      if (!user) {
-        return res.status(404).json({ success: false, message: "Invalid email" });
-      }
-  
-      if (aesKey !== user.aesKey) {
-        return res.status(401).json({ success: false, message: "Invalid AES Key" });
-      }
-  
-      const images = await Image.find({ email }).sort({ timestamp: -1 });
-      if (!images.length) {
-        return res.status(404).json({ success: false, message: "No images found for this user" });
-      }
-  
-      const decryptedImages = [];
-  
-      for (let image of images) {
-        const encryptedPath = path.join(ENCRYPTED_DIR, image.filename);
-        const decryptedFilename = dec_${image.filename};
-        const decryptedPath = path.join(DECRYPTED_DIR, decryptedFilename);
-  
-        // If already decrypted, just push the path
-        if (fs.existsSync(decryptedPath)) {
-          decryptedImages.push({
-            filename: decryptedFilename,
-            imagePath: http://localhost:${PORT}/decrypted-images/${decryptedFilename},
-            timestamp: image.timestamp,
-          });
-          continue;
-        }
-  
-        // If encrypted image file is missing, skip it
-        if (!fs.existsSync(encryptedPath)) {
-          //console.warn(Encrypted file not found: ${encryptedPath});
-          continue;
-        }
-  
-        const encryptedBuffer = fs.readFileSync(encryptedPath);
-        const iv = Buffer.from(image.iv, "hex");
-  
-        if (iv.length !== 16) {
-          console.error(Invalid IV length for image: ${image.filename});
-          continue;
-        }
-  
-        try {
-          const decipher = crypto.createDecipheriv("aes-128-cbc", Buffer.from(aesKey, "utf8"), iv);
-          let decrypted = decipher.update(encryptedBuffer);
-          decrypted = Buffer.concat([decrypted, decipher.final()]);
-  
-          fs.writeFileSync(decryptedPath, decrypted);
-  
-          decryptedImages.push({
-            filename: decryptedFilename,
-            imagePath: http://localhost:${PORT}/decrypted-images/${decryptedFilename},
-            timestamp: image.timestamp,
-          });
-        } catch (decryptionError) {
-          console.error(Decryption failed for ${image.filename}:, decryptionError.message);
-          continue;
-        }
-      }
-  
-      res.status(200).json({
-        success: true,
-        message: "Images decrypted successfully",
-        images: decryptedImages,
-      });
-    } catch (err) {
-      console.error("Decryption Error:", err.message);
-      res.status(500).json({ success: false, message: "Server error", error: err.message });
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ success: false, message: "Email is required" });
+
+    const user = await User.findOne({ email });
+    if (!user || !user.aesKey) {
+      return res.status(404).json({ success: false, message: "User or AES key not found" });
     }
-  });
+
+    const images = await Image.find({ email }).sort({ timestamp: -1 });
+    if (!images.length) {
+      return res.status(404).json({ success: false, message: "No images found for this user" });
+    }
+
+    const keyBuffer = Buffer.alloc(16);
+    Buffer.from(user.aesKey, 'utf8').copy(keyBuffer);
+
+    const decryptedUploads = [];
+
+    for (const image of images) {
+      const encryptedResponse = await axios.get(image.cloudinaryUrl, { responseType: 'arraybuffer' });
+      const encryptedBuffer = Buffer.from(encryptedResponse.data);
+      const ivBuffer = Buffer.from(image.iv, 'hex');
+
+      const decipher = crypto.createDecipheriv('aes-128-cbc', keyBuffer, ivBuffer);
+      let decrypted = decipher.update(encryptedBuffer);
+      decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+      const cloudResult = await new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+          {
+            resource_type: 'image',
+            public_id: `decrypted/${image.filename.replace('enc_', 'dec_')}`,
+            overwrite: true
+          },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        streamifier.createReadStream(decrypted).pipe(uploadStream);
+      });
+
+      // Optionally update DB with decrypted URL
+      image.decryptedUrl = cloudResult.secure_url;
+      await image.save();
+
+      decryptedUploads.push({
+        originalFilename: image.filename,
+        decryptedUrl: cloudResult.secure_url
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Decrypted images uploaded to Cloudinary",
+      images: decryptedUploads
+    });
+
+  } catch (err) {
+    console.error("Error in /decrypt-images:", err.message);
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+});
+
   
   // Route 2: Fetch decrypted images (already processed)
   app.post("/get-decrypted-images", async (req, res) => {
