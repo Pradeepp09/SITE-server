@@ -148,50 +148,49 @@ app.post('/upload', express.raw({ type: 'image/jpeg', limit: '10mb' }), async (r
         encrypted = Buffer.concat([encrypted, cipher.final()]);
 
         // Upload encrypted image to Cloudinary
-        const uploadToCloudinary = () => {
-            return new Promise((resolve, reject) => {
-                const uploadStream = cloudinary.uploader.upload_stream(
-                    {
-                        resource_type: 'image',
-                        public_id: encrypted/enc_${timestamp}, // optional folder and name
-                        overwrite: true
-                    },
-                    (error, result) => {
-                        if (error) reject(error);
-                        else resolve(result);
-                    }
-                );
+const uploadToCloudinary = () => {
+    return new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+            {
+                resource_type: 'image',
+                public_id: `encrypted/enc_${timestamp}`, // corrected string interpolation
+                overwrite: true
+            },
+            (error, result) => {
+                if (error) reject(error);
+                else resolve(result);
+            }
+        );
 
-                streamifier.createReadStream(encrypted).pipe(uploadStream);
-            });
-        };
+        streamifier.createReadStream(encrypted).pipe(uploadStream);
+    });
+};
 
-        let result;
-        try {
-            result = await uploadToCloudinary();
-        } catch (err) {
-            return res.status(500).json({ success: false, message: "Cloudinary upload failed", error: err.message });
-        }
+let result;
+try {
+    result = await uploadToCloudinary();
+} catch (err) {
+    return res.status(500).json({
+        success: false,
+        message: "Cloudinary upload failed",
+        error: err.message
+    });
+}
 
-        // Save image metadata to DB
-        const newImage = new Image({
-            filename: enc_${timestamp}.jpg,
-            iv: iv.toString('hex'),
-            cloudinaryUrl: result.secure_url,
-            email: user.email
-        });
+// Save image metadata to DB
+const newImage = new Image({
+    filename: `enc_${timestamp}.jpg`, // corrected string interpolation
+    iv: iv.toString('hex'),
+    cloudinaryUrl: result.secure_url,
+    email: user.email
+});
 
-        await newImage.save();
+await newImage.save();
 
-        res.status(200).json({
-            success: true,
-            message: "Image encrypted and uploaded to Cloudinary",
-            cloudinaryUrl: result.secure_url
-        });
-    } catch (err) {
-        console.error("Upload/Encrypt error:", err.message);
-        res.status(500).json({ success: false, message: "Server error", error: err.message });
-    }
+res.status(200).json({
+    success: true,
+    message: "Image encrypted and uploaded to Cloudinary",
+    cloudinaryUrl: result.secure_url
 });
 
 
